@@ -274,7 +274,8 @@ class Microsecrets(object):
 
 
     def exec_with_s3_env(self, command, checksum=None, env_whitelist=None,
-                         env_whitelist_all=None, ignore_extra=False):
+                         env_whitelist_all=None, ignore_extra=False,
+                         use_path=True):
         """
         Execute command with extra environment variables downloaded from S3.
 
@@ -294,6 +295,9 @@ class Microsecrets(object):
                              disallowed environment variables. (Default of
                              False will cause an exception to be raised.)
         :type ignore_extra: boolean
+
+        :param use_path: Whether to search PATH to find the command to exec
+        :type use_path: boolean
         """
 
         log.debug('Method: exec_with_s3_env')
@@ -306,7 +310,7 @@ class Microsecrets(object):
         log.debug('Environment: %r', env)
         log.debug('Command: %r', command)
 
-        exec_with_extra_env(command=command, env=env)
+        exec_with_extra_env(command=command, env=env, use_path=use_path)
 
         log.error('Somehow returned from exec?')
 
@@ -365,22 +369,36 @@ class Microsecrets(object):
         return env
 
 
-def exec_with_extra_env(command, env):
+def exec_with_extra_env(command, env, use_path=False):
     """
     Exec command, merging in environment variables from env. On success, this
     command replaces the current process and does not return.
+
+    :param command: The command to run
+    :type command: list<string>
+
+    :param env: An environment variable dict
+    :type env: dict<string:string>
+
+    :param use_path: Whether to search PATH to find the command
+    :type use_path: boolean
     """
     # copy a new environment for the child with merged keys
     new_env = dict(os.environ, **env)
 
-    log.debug('about to os.execve: %r', command)
+    if use_path:
+        log.debug('Will search PATH for the command')
+        exec_func = os.execvpe
+    else:
+        log.debug('Will not search PATH for the command')
+        exec_func = os.execve
+
+    log.debug('About to os.%s: %r', exec_func.__name__, command)
 
     sys.stderr.flush()
     sys.stdout.flush()
 
-    # TODO: do we want to use execvpe to use the PATH to find the command?
-
-    os.execve(command[0], command, new_env)
+    exec_func(command[0], command, new_env)
     # does not return
 
 def checksum_is_valid(data, checksum):
