@@ -45,7 +45,7 @@ setup(
 
     # TODO: generate from requirements.txt
     install_requires=[
-        'boto3~=1.3',
+        'boto3 >= 1.3.0, < 2.0',
     ],
 
     # See https://pypi.python.org/pypi?%3Aaction=list_classifiers
