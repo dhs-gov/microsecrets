@@ -20,7 +20,10 @@ import boto3
 import botocore
 
 log = logging.getLogger(__name__)
-log.setLevel(logging.INFO)
+log.setLevel(logging.WARNING)
+
+# Set this to True to enable logging of environment variable values
+INSECURE_DEBUG = False
 
 logging.basicConfig(
     format='%(asctime)s %(name)s: %(levelname)s %(message)s',
@@ -45,12 +48,14 @@ def assert_dict_of_strings(obj):
         assert_string(val)
 
 def set_log_verbose_mode():
+    log.setLevel(logging.INFO)
+
+def set_log_debug_mode():
     logging.getLogger().setLevel(logging.INFO)
     log.setLevel(logging.DEBUG)
 
 class Microsecrets(object):
-    def __init__(self, region_name, bucket_name, service_name,
-                 kms_key_alias=None, kms_key_id=None):
+    def __init__(self, region_name, bucket_name, service_name):
         """
         Microsecrets, a simple S3 + KMS secrets store.
 
@@ -65,6 +70,26 @@ class Microsecrets(object):
 
         :param service_name: The name of the service (determines S3 path)
         :type service_name: string
+        """
+
+        log.info('Init Microsecrets for service %r', service_name)
+        self.region_name = region_name
+        self.bucket_name = bucket_name
+        self.service_name = service_name
+
+        self._connect_s3(bucket_name=bucket_name)
+
+
+    def upload_environment_from_stream(self, stream, json_input=False,
+                                       kms_key_alias=None, kms_key_id=None):
+        """
+        Read environment variable data from a file stream, upload it to S3
+        encrypted with KMS.
+
+        :param stream: The stream object to read environment data from
+
+        :param json_input: Whether the input is in key=value lines or JSON
+        :type json_input: boolean
 
         :param kms_key_alias: Optional alias to specify the KMS key to use
         :type kms_key_alias: string
@@ -73,38 +98,30 @@ class Microsecrets(object):
                            call needed to look up key by alias
         :type kms_key_id: string
         """
-
-        log.debug('Init Microsecrets for service %r', service_name)
-        self.region_name = region_name
-        self.bucket_name = bucket_name
-        self.service_name = service_name
-
-        self._connect_s3(bucket_name=bucket_name)
+        log.debug('Method: upload_environment_from_stream')
 
         # set / look up the KMS key to use
         if kms_key_id is not None:
-            assert not kms_key_alias
-            self.kms_key_id = kms_key_id
+            assert not kms_key_alias, 'kms_key_id, kms_key_alias are exclusive'
         else:
-            if kms_key_alias is not None:
-                self.kms_key_alias = kms_key_alias
-            else:
-                self.kms_key_alias = 'microsecrets-' + self.service_name
-            self.kms_key_id = self._get_kms_key_id()
-
-    def upload_environment_from_stream(self, stream, json_input=False):
-        log.debug('Method: upload_environment_from_stream')
+            if kms_key_alias is None:
+                kms_key_alias = self._default_kms_alias()
+            kms_key_id = self._get_kms_key_id(kms_key_alias)
 
         if json_input:
             env = self._load_env_from_json_stream(stream)
         else:
             env = self._load_env_from_pairs_stream(stream)
 
-        log.debug('Uploading environment: %r', env)
-        return self._upload_environment(env)
+        if INSECURE_DEBUG:
+            log.debug('Uploading environment: %r', env)
+        else:
+            log.debug('Uploading environment keys: %r', env.keys())
+
+        return self._upload_environment(env=env, kms_key_id=kms_key_id)
 
     def _load_env_from_pairs_stream(self, stream):
-        log.debug('Reading KEY=value environment pairs from %r', stream.name)
+        log.info('Reading KEY=value environment pairs from %r', stream.name)
         env = {}
 
         for line in stream:
@@ -125,7 +142,7 @@ class Microsecrets(object):
         return env
 
     def _load_env_from_json_stream(self, stream):
-        log.debug('Reading JSON environment dict from %r', stream.name)
+        log.info('Reading JSON environment dict from %r', stream.name)
         data = json.load(stream)
 
         assert_dict_of_strings(data)
@@ -147,14 +164,14 @@ class Microsecrets(object):
     def _kms(self):
         return self.boto_session.client('kms')
 
-    def _describe_kms_key(self, alias=None):
-        if alias is None:
-            alias = self.kms_key_alias
-
+    def _describe_kms_key(self, alias):
         log.debug('Looking up KMS key with alias %r', alias)
         return self._kms().describe_key(KeyId='alias/'+alias)
 
-    def _get_kms_key_id(self, alias=None):
+    def _default_kms_alias(self):
+        return 'microsecrets-' + self.service_name
+
+    def _get_kms_key_id(self, alias):
         key_id = self._describe_kms_key(alias=alias)['KeyMetadata']['KeyId']
         log.debug('Loaded KMS key %r', key_id)
         return key_id
@@ -171,13 +188,13 @@ class Microsecrets(object):
     def _s3_path_files(self, name):
         return self._s3_path('files/' + name)
 
-    def _upload_environment(self, env):
+    def _upload_environment(self, env, kms_key_id):
         # validate that env is a dict of strings
         for key, val in env.iteritems():
             assert_string(key)
             assert_string(val)
 
-        log.debug('Uploading environment with %d variables', len(env))
+        log.info('Uploading environment with %d variables', len(env))
 
         # prepare json for upload
         text = json.dumps({
@@ -190,13 +207,15 @@ class Microsecrets(object):
 
         r_dict = self._s3_upload_file(folder=self._s3_path_environment(),
                                       text=text, extension='json',
+                                      kms_key_id=kms_key_id,
                                       content_type='application/json')
 
-        log.debug('Uploaded environment to path %r', r_dict['key'])
+        log.info('Uploaded environment to path %r', r_dict['key'])
 
         return r_dict
 
-    def _s3_upload_file(self, folder, text, extension=None, content_type=None):
+    def _s3_upload_file(self, folder, text, kms_key_id, extension=None,
+                        content_type=None):
         """
         Upload text to S3 with the given prefix folder.
 
@@ -208,7 +227,8 @@ class Microsecrets(object):
 
         key = folder.rstrip('/') + '/' + fname
 
-        self._s3_raw_upload(key=key, body=text, content_type=content_type)
+        self._s3_raw_upload(key=key, body=text, kms_key_id=kms_key_id,
+                            content_type=content_type)
 
         return {
             'bucket': self.bucket.name,
@@ -216,7 +236,7 @@ class Microsecrets(object):
             'digest': digest,
         }
 
-    def _s3_raw_upload(self, key, body, content_type=None):
+    def _s3_raw_upload(self, key, body, kms_key_id, content_type=None):
         """
         Low level method: upload text to S3 at key.
 
@@ -231,9 +251,9 @@ class Microsecrets(object):
             kwargs['ContentType'] = content_type
 
         kwargs['ServerSideEncryption'] = 'aws:kms'
-        kwargs['SSEKMSKeyId'] = self.kms_key_id
+        kwargs['SSEKMSKeyId'] = kms_key_id
 
-        log.debug('Putting content to S3: %r', obj)
+        log.debug('Putting %d bytes of content to S3: %r', len(body), obj)
 
         return obj.put(ACL='private', Body=body, **kwargs)
 
@@ -275,7 +295,7 @@ class Microsecrets(object):
 
     def exec_with_s3_env(self, command, checksum=None, env_whitelist=None,
                          env_whitelist_all=None, ignore_extra=False,
-                         use_path=True):
+                         use_path=True, env_delete=None):
         """
         Execute command with extra environment variables downloaded from S3.
 
@@ -298,19 +318,32 @@ class Microsecrets(object):
 
         :param use_path: Whether to search PATH to find the command to exec
         :type use_path: boolean
+
+        :param env_delete: A list of environment variables to remove before
+                           executing the command
+        :type env_delete: iterable of strings
         """
 
         log.debug('Method: exec_with_s3_env')
+
+        log.info('Downloading environment from S3')
 
         env = self._download_s3_environment(checksum=checksum,
                                             env_whitelist=env_whitelist,
                                             env_whitelist_all=env_whitelist_all,
                                             ignore_extra=ignore_extra)
 
-        log.debug('Environment: %r', env)
+        if INSECURE_DEBUG:
+            log.debug('Environment: %r', env)
+        else:
+            log.debug('Environment keys: %r', env.keys())
+
         log.debug('Command: %r', command)
 
-        exec_with_extra_env(command=command, env=env, use_path=use_path)
+        log.info('Executing command with environment')
+
+        exec_with_extra_env(command=command, env=env, use_path=use_path,
+                            env_delete=env_delete)
 
         log.error('Somehow returned from exec?')
 
@@ -369,7 +402,7 @@ class Microsecrets(object):
         return env
 
 
-def exec_with_extra_env(command, env, use_path=False):
+def exec_with_extra_env(command, env, use_path=False, env_delete=None):
     """
     Exec command, merging in environment variables from env. On success, this
     command replaces the current process and does not return.
@@ -382,9 +415,24 @@ def exec_with_extra_env(command, env, use_path=False):
 
     :param use_path: Whether to search PATH to find the command
     :type use_path: boolean
+
+    :param env_delete: A list of environment variables to remove before
+                       executing the command
+    :type env_delete: iterable of strings
     """
     # copy a new environment for the child with merged keys
     new_env = dict(os.environ, **env)
+
+    # delete any blacklisted environment variables
+    if env_delete:
+        log.debug('Removing blacklisted env variables: %r', env_delete)
+        for key in env_delete:
+            new_env.pop(key, None)
+
+    if INSECURE_DEBUG:
+        log.debug('Computed environment for command: %r', new_env)
+    else:
+        log.debug('Computed environment keys for command: %r', new_env.keys())
 
     if use_path:
         log.debug('Will search PATH for the command')
