@@ -4,6 +4,7 @@ Microsecrets, a simple S3 secrets store.
 
 VERSION = '0.1.4'
 
+import contextlib
 import getpass
 import hashlib
 import json
@@ -11,6 +12,7 @@ import logging
 import os
 import re
 import socket
+import stat
 import sys
 import time
 
@@ -72,7 +74,8 @@ class Microsecrets(object):
         :type service_name: string
         """
 
-        log.info('Init Microsecrets for service %r', service_name)
+        log.info('Init Microsecrets for service %r, S3 bucket %r',
+                 service_name, bucket_name)
         self.region_name = region_name
         self.bucket_name = bucket_name
         self.service_name = service_name
@@ -214,6 +217,52 @@ class Microsecrets(object):
 
         return r_dict
 
+
+    def upload_file_from_stream(self, stream, label, kms_key_alias=None,
+                                kms_key_id=None):
+        """
+        Read data from a file stream, upload it to S3 encrypted with KMS.
+
+        :param stream: The stream object to read file data from
+
+        :param label: The label used to determine the S3 folder
+        :type label: str
+
+        :param kms_key_alias: Optional alias to specify the KMS key to use
+        :type kms_key_alias: str
+
+        :param kms_key_id: Optional ID of KMS key to use, avoids the DescribeKey
+                           call needed to look up key by alias
+        :type kms_key_id: str
+        """
+        log.debug('Method: upload_file_to_s3')
+
+        log.info('Uploading data to S3 from %r', stream)
+
+        # set / look up the KMS key to use
+        if kms_key_id is not None:
+            assert not kms_key_alias, 'kms_key_id, kms_key_alias are exclusive'
+        else:
+            if kms_key_alias is None:
+                kms_key_alias = self._default_kms_alias()
+            kms_key_id = self._get_kms_key_id(kms_key_alias)
+
+        text = stream.read()
+
+        if INSECURE_DEBUG:
+            log.debug('Will upload data: %r', text)
+        else:
+            log.debug('Will upload %d bytes', len(text))
+
+        r_dict = self._s3_upload_file(folder=self._s3_path_files(label),
+                                      text=text, kms_key_id=kms_key_id)
+        # TODO: content_type?
+
+        log.info('Uploaded file: %r', r_dict['key'])
+
+        return r_dict
+
+
     def _s3_upload_file(self, folder, text, kms_key_id, extension=None,
                         content_type=None):
         """
@@ -292,6 +341,63 @@ class Microsecrets(object):
 
         return (fname, digest)
 
+    def download_s3_file(self, name, dest_path, checksum=None, mode=0o600):
+        log.info('Downloading %r from S3 to %r', name, dest_path)
+        log.debug('mode: %r, expected checksum: %r', mode, checksum)
+
+        prefix = self._s3_path_files(name) + '/'
+        obj = self._s3_find_latest(prefix=prefix)
+
+        log.info('Downloading file: s3://%s/%s', obj.bucket_name, obj.key)
+        resp = obj.get()
+
+        # TODO: stream response rather than keeping it all in memory?
+        data = resp['Body'].read()
+
+        if checksum is None:
+            log.info('Not verifying checksum')
+        else:
+            if checksum_is_valid(data=data, checksum=checksum):
+                log.debug('File passes checksum %r', checksum)
+            else:
+                raise ValueError('File {!r} does not match checksum {!r}'
+                                 .format(obj.key, checksum))
+
+        log.debug('Writing out data to %r', dest_path)
+        with _open_new_file_rw(path=dest_path, mode=mode) as fh:
+            fh.write(data)
+
+        log.info('Successfully downloaded file')
+
+        return obj
+
+    def parse_file_arg(self, string):
+        """
+        Parse the string argument to the --file NAME:PATH[:HASH] option.
+
+        Return a dictionary with 'name', 'path', and 'checksum' keys.
+
+        :param string: The argument
+        :value string: string
+        """
+        parts = string.split(':')
+
+        if len(parts) == 2:
+            name, path = parts
+            checksum = None
+        elif len(parts) == 3:
+            name, path, checksum = parts
+            if not _is_hex_string(checksum):
+                raise ValueError('invalid checksum: ' + repr(checksum))
+        else:
+            raise ValueError('Cannot parse as NAME:PATH[:HASH]: ' +
+                             repr(string))
+
+        return {
+            'name': name,
+            'path': path,
+            'checksum': checksum,
+        }
 
     def exec_with_s3_env(self, command, checksum=None, env_whitelist=None,
                          env_whitelist_all=None, ignore_extra=False,
@@ -333,10 +439,10 @@ class Microsecrets(object):
                                             env_whitelist_all=env_whitelist_all,
                                             ignore_extra=ignore_extra)
 
-        if INSECURE_DEBUG:
-            log.debug('Environment: %r', env)
+        if INSECURE_DEBUG and log.level <= logging.DEBUG:
+            log.debug('S3 environment: %r', env)
         else:
-            log.debug('Environment keys: %r', env.keys())
+            log.info('S3 environment keys: %r', env.keys())
 
         log.debug('Command: %r', command)
 
@@ -352,6 +458,7 @@ class Microsecrets(object):
         obj = self._s3_find_latest(prefix=self._s3_path_environment()+'/')
 
         log.debug('Downloading object from S3: %r', obj)
+        log.info('Downloading environment variables from S3 at %r', obj.key)
         data = obj.get()['Body'].read()
 
         if checksum is not None:
@@ -430,9 +537,9 @@ def exec_with_extra_env(command, env, use_path=False, env_delete=None):
             new_env.pop(key, None)
 
     if INSECURE_DEBUG:
-        log.debug('Computed environment for command: %r', new_env)
+        log.debug('Environment for command: %r', new_env)
     else:
-        log.debug('Computed environment keys for command: %r', new_env.keys())
+        log.debug('Environment keys for command: %r', new_env.keys())
 
     if use_path:
         log.debug('Will search PATH for the command')
@@ -465,3 +572,31 @@ def checksum_is_valid(data, checksum):
                   real_csum, checksum)
         return False
 
+@contextlib.contextmanager
+def _open_new_file_rw(path, mode):
+    """
+    Atomically create a new file at `path` with `mode`. Fail if the file
+    already exists. Return an open handle to the file in read/write mode.
+
+    Will run os.open(path, os.O_RDWR|os.O_CREAT|os.O_EXCL, mode)
+
+    :param path: The path to the file
+    :type path: string
+
+    :param mode: The file system mode of the file to create. The actual file
+                 will have umask bits removed from the resulting permissions.
+    :type mode: int
+    """
+
+    # sanity check mode, refusing to set setuid, setgid, or sticky bits
+    if mode & stat.S_ISUID: raise ValueError('Refusing to set file setuid')
+    if mode & stat.S_ISGID: raise ValueError('Refusing to set file setgid')
+    if mode & stat.S_ISVTX: raise ValueError('Refusing to set file sticky bit')
+
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL, mode)
+    with os.fdopen(fd, 'w+') as fh:
+        yield fh
+
+def _is_hex_string(text):
+    hex_digits = set('0123456789abcdefABCDEF')
+    return all(c in hex_digits for c in text)
