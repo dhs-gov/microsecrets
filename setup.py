@@ -41,7 +41,11 @@ setup(
     license='MIT',
 
     # TODO: switch to console_scripts instead of scripts
-    scripts=['bin/microsecrets-upload', 'bin/microsecrets-with-env'],
+    scripts=[
+        'bin/microsecrets-upload',
+        'bin/microsecrets-with-env',
+        'bin/microsecrets-download',
+    ],
 
     # TODO: generate from requirements.txt
     install_requires=[

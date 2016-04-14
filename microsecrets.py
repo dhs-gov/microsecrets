@@ -341,8 +341,22 @@ class Microsecrets(object):
 
         return (fname, digest)
 
-    def download_s3_file(self, name, dest_path, checksum=None, mode=0o600):
-        log.info('Downloading %r from S3 to %r', name, dest_path)
+    def download_s3_file(self, name, dest_path=None, dest_stream=None,
+                         checksum=None, mode=0o600):
+
+        if not dest_stream and not dest_path:
+            raise ValueError('must pass either dest_path or dest_stream')
+
+        if dest_stream:
+            if dest_path:
+                log.error('dest_stream %r, dest_path %r', dest_stream, dest_path)
+                raise ValueError('dest_stream and dest_path are exclusive args')
+            else:
+                out_name = dest_stream.name
+        else:
+            out_name = dest_path
+
+        log.info('Downloading %r from S3 to %r', name, out_name)
         log.debug('mode: %r, expected checksum: %r', mode, checksum)
 
         prefix = self._s3_path_files(name) + '/'
@@ -363,26 +377,40 @@ class Microsecrets(object):
                 raise ValueError('File {!r} does not match checksum {!r}'
                                  .format(obj.key, checksum))
 
-        log.debug('Writing out data to %r', dest_path)
-        with _open_new_file_rw(path=dest_path, mode=mode) as fh:
-            fh.write(data)
+        if dest_stream:
+            log.debug('Appending data to stream %r', out_name)
+            dest_stream.write(data)
+        else:
+            log.debug('Writing out data to %r', dest_path)
+            with _open_new_file_rw(path=dest_path, mode=mode) as fh:
+                fh.write(data)
 
         log.info('Successfully downloaded file')
 
         return obj
 
-    def parse_file_arg(self, string):
+    def parse_file_arg(self, string, require_path=True):
         """
-        Parse the string argument to the --file NAME:PATH[:HASH] option.
+        Parse the string argument to the --file NAME[:PATH[:HASH]] option.
 
         Return a dictionary with 'name', 'path', and 'checksum' keys.
 
         :param string: The argument
-        :value string: string
+        :type string: str
+
+        :param require_path: Whether to require that the PATH is present
+        :type require_path: boolean
         """
         parts = string.split(':')
 
-        if len(parts) == 2:
+        if len(parts) == 1:
+            if require_path:
+                raise ValueError('Cannot parse as NAME:PATH[:HASH]: ' +
+                                 repr(string))
+            name = parts[0]
+            path = None
+            checksum = None
+        elif len(parts) == 2:
             name, path = parts
             checksum = None
         elif len(parts) == 3:
