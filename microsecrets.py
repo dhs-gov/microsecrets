@@ -17,6 +17,7 @@ import sys
 import time
 
 from datetime import datetime
+from operator import attrgetter
 
 import boto3
 import botocore
@@ -323,7 +324,8 @@ class Microsecrets(object):
 
     def _s3_find_latest(self, prefix, bucket=None):
         try:
-            return max((bucket or self.bucket).objects.filter(Prefix=prefix))
+            results = (bucket or self.bucket).objects.filter(Prefix=prefix)
+            return max(results, key=attrgetter('key'))
         except ValueError as e:
             if 'empty sequence' in e.message:
                 log.error('No S3 objects found')
