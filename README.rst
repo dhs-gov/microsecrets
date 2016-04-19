@@ -20,6 +20,9 @@ Installation
 Usage
 -----
 
+Setup
+~~~~~
+
 1. Create the S3 bucket you'll use for secrets storage. You may want one bucket
    per organization, such as ``example.com-microsecrets``.
 
@@ -29,10 +32,13 @@ Usage
    the credentials will need privileges to encrypt/decrypt data using this key.
    None of the normal users need key administration privileges.
 
-3. Upload an environment file. Environment variables may be passed as ``=``
-   separated pairs on stdin or in a file. *NB: whitespace is stripped and all
-   other characters are treated literally.* Or pass them as a JSON dict with
-   the ``--json`` flag.
+Uploading environment and files
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+1. Upload environment variable data. Environment variables may be passed as
+   ``=`` separated pairs on stdin or in a file. *NB: whitespace is stripped and
+   all other characters are treated literally.* Or pass them as a JSON dict
+   with the ``--json`` flag.
 
    .. code-block:: bash
 
@@ -41,7 +47,35 @@ Usage
         PASSWORD=hunter2
         EOM
 
-4. Run a program with the credentials in the environment. To verify the
+2. Upload a raw file. Usage is the same as uploading environment variables, but
+   you pass a -f LABEL to determine where to upload the file. This example
+   uploads a file from ``~/documents/train.txt`` with label ``train.txt``.
+
+   .. code-block:: bash
+
+        $ microsecrets-upload -b example-microsecrets -s myservice -f train.txt ~/documents/train.txt
+
+Downloading files to show status
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+TODO: flesh out this section
+
+1. Download the environment
+
+   .. code-block:: bash
+
+        $ microsecrets-download -b example-microsecrets -s myservice
+
+2. Download files with the environment
+
+   .. code-block:: bash
+
+        $ microsecrets-download -b example-microsecrets -s myservice -f train.txt:/tmp/train.txt
+
+Running programs under environment with secrets
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+1. Run a program with the credentials in the environment. To verify the
    integrity of data in S3, you must specify the checksum of the environment
    file (output by the upload tool) or whitelist specific environment
    variables. Or, if integrity is not a concern, whitelist all environment
