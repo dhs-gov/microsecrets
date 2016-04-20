@@ -102,4 +102,12 @@ There is a variety of other recent work in this space that may be of interest:
 License
 -------
 
-MIT License
+`The project is in the public domain`_, and all contributions will also be
+released in the public domain. By submitting a pull request, you are agreeing
+to waive all rights to your contribution under the terms of the `CC0 Public
+Domain Dedication`_.
+
+This project constitutes an original work of the United States Government.
+
+.. _`The project is in the public domain`: ./LICENSE.md
+.. _`CC0 Public Domain Dedication`: http://creativecommons.org/publicdomain/zero/1.0/

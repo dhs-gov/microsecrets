@@ -38,7 +38,7 @@ setup(
     author='Andy Brody',
     author_email='git@abrody.com',
 
-    license='MIT',
+    license='Public Domain',
 
     # TODO: switch to console_scripts instead of scripts
     scripts=[
@@ -66,7 +66,7 @@ setup(
         'Topic :: Security',
 
         # Pick your license as you wish (should match "license" above)
-        'License :: OSI Approved :: MIT License',
+        'License :: Public Domain',
 
         # Specify the Python versions you support here. In particular, ensure
         # that you indicate whether you support Python 2, Python 3 or both.
