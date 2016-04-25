@@ -343,6 +343,40 @@ class Microsecrets(object):
 
         return (fname, digest)
 
+    def list_files_and_env(self):
+        env_obj = self._s3_find_latest(prefix=self._s3_path_environment()+'/')
+
+        return [env_obj] + self._list_files()
+
+    def _list_files(self):
+        prefix = self._s3_path_files('')
+        results = list(self.bucket.objects.filter(Prefix=prefix))
+        if not results:
+            return []
+
+        found_files = {}
+
+        for obj in results:
+            assert obj.key.startswith(prefix)
+            suffix = obj.key[len(prefix):]
+            parts = suffix.split('/')
+
+            if len(parts) != 2:
+                log.warning("Skipping S3 key with unexpected depth: %r",
+                            obj.key)
+
+            file_name, file_info = parts
+
+            # keep only the latest (greatest sort order) object for each
+            # file_name prefix
+            if file_name in found_files:
+                if obj.key > found_files[file_name].key:
+                    found_files[file_name] = obj
+            else:
+                found_files[file_name] = obj
+
+        return list(found_files.values())
+
     def download_s3_file(self, name, dest_path=None, dest_stream=None,
                          checksum=None, mode=0o600):
 

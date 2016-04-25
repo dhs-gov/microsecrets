@@ -60,13 +60,19 @@ Downloading files to show status
 
 TODO: flesh out this section
 
-1. Download the environment
+1. List latest versions of current files available for download
+
+   .. code-block:: bash
+
+        $ microsecrets-download -b example-microsecrets -s myservice --list
+
+2. Download the environment
 
    .. code-block:: bash
 
         $ microsecrets-download -b example-microsecrets -s myservice
 
-2. Download files with the environment
+3. Download files with the environment
 
    .. code-block:: bash
 
