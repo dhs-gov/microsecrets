@@ -2,7 +2,7 @@
 Microsecrets, a simple S3 secrets store.
 """
 
-VERSION = '0.3.0'
+VERSION = '0.3.1'
 
 import contextlib
 import getpass
