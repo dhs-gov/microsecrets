@@ -9,6 +9,7 @@ import getpass
 import hashlib
 import json
 import logging
+import numbers
 import os
 import re
 import socket
@@ -45,10 +46,23 @@ def assert_string(obj):
     if not isinstance(obj, basestring):
         raise ValueError('object is not a string: {!r}'.format(obj))
 
+def assert_scalar(obj):
+    if isinstance(obj, basestring):
+        return
+    if isinstance(obj, numbers.Number):
+        return
+
+    raise ValueError('object is not a scalar: {!r}'.format(obj))
+
 def assert_dict_of_strings(obj):
     for key, val in obj.iteritems():
         assert_string(key)
         assert_string(val)
+
+def assert_dict_of_scalars(obj):
+    for key, val in obj.iteritems():
+        assert_scalar(key)
+        assert_scalar(val)
 
 def set_log_verbose_mode():
     log.setLevel(logging.INFO)
@@ -519,11 +533,11 @@ class Microsecrets(object):
 
     def _download_s3_environment(self, checksum=None, env_whitelist=None,
                                  env_whitelist_all=None, ignore_extra=False):
-        obj = self._s3_find_latest(prefix=self._s3_path_environment()+'/')
 
-        log.debug('Downloading object from S3: %r', obj)
-        log.info('Downloading environment variables from S3 at %r', obj.key)
-        data = obj.get()['Body'].read()
+        result = self._download_s3_environment_raw()
+
+        data = result['body']
+        s3_key = result['key']
 
         if checksum is not None:
             if checksum_is_valid(data=data, checksum=checksum):
@@ -533,25 +547,42 @@ class Microsecrets(object):
                     'JSON does not match checksum {!r}'.format(checksum))
 
         return self._process_environment_json(
-            data, env_whitelist=env_whitelist,
+            data,
+            env_whitelist=env_whitelist,
             env_whitelist_all=env_whitelist_all,
-            ignore_extra=ignore_extra)
+            ignore_extra=ignore_extra,
+            s3_key=s3_key,
+            include_metadata=True)
+
+    def _download_s3_environment_raw(self):
+        obj = self._s3_find_latest(prefix=self._s3_path_environment()+'/')
+
+        log.debug('Downloading object from S3: %r', obj)
+        log.info('Downloading environment variables from S3 at %r', obj.key)
+        return {
+            'body': obj.get()['Body'].read(),
+            'key': obj.key,
+        }
 
     def _process_environment_json(self, json_text, env_whitelist=None,
-                                  env_whitelist_all=False, ignore_extra=False):
+                                  env_whitelist_all=False, ignore_extra=False,
+                                  s3_key=None, include_metadata=True):
+
+        if env_whitelist is None:
+            env_whitelist = set()
 
         data = json.loads(json_text)
         env = {}
 
         if not 'environment' in data:
             raise KeyError("No `environment' key found in JSON")
+        if not 'metadata' in data:
+            raise KeyError("No `metadata' key found in JSON")
 
         assert_dict_of_strings(data['environment'])
+        assert_dict_of_scalars(data['metadata'])
 
         for key, val in data['environment'].iteritems():
-            assert_string(key)
-            assert_string(val)
-
             if not env_whitelist_all:
                 if key not in env_whitelist:
                     if ignore_extra:
@@ -569,6 +600,10 @@ class Microsecrets(object):
                         raise ValueError(msg)
 
             env[key] = val
+
+        if include_metadata:
+            env['MICROSECRETS_METADATA'] = json.dumps(data['metadata'])
+            env['MICROSECRETS_SOURCE'] = s3_key or ''
 
         return env
 
