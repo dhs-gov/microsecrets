@@ -42,6 +42,9 @@ HASH_LEN_FUNC_MAP = {
     128: hashlib.sha512,
 }
 
+class MicrosecretsError(Exception): pass
+class NotFound(MicrosecretsError): pass
+
 def assert_string(obj):
     if not isinstance(obj, basestring):
         raise ValueError('object is not a string: {!r}'.format(obj))
@@ -337,12 +340,19 @@ class Microsecrets(object):
         return resp['Body'].read()
 
     def _s3_find_latest(self, prefix, bucket=None):
+        if bucket is None:
+            bucket = self.bucket
+
+        url = 's3://{}{}'.format(bucket.name, prefix)
+        log.info('_s3_find_latest: %r', url)
+
         try:
-            results = (bucket or self.bucket).objects.filter(Prefix=prefix)
+            results = bucket.objects.filter(Prefix=prefix)
             return max(results, key=attrgetter('key'))
         except ValueError as e:
             if 'empty sequence' in e.message:
-                log.error('No S3 objects found')
+                log.warning('No S3 objects found: %r', url)
+                raise NotFound('No S3 objects under {!r}'.format(url))
             raise
 
     def _compute_s3_filename_and_digest(self, text, extension=None):
@@ -358,12 +368,18 @@ class Microsecrets(object):
         return (fname, digest)
 
     def list_files_and_env(self):
-        env_obj = self._s3_find_latest(prefix=self._s3_path_environment()+'/')
+        try:
+            env_obj = self._s3_find_latest(prefix=self._s3_path_environment()+'/')
+        except NotFound:
+            objs = []
+        else:
+            objs = [env_obj]
 
-        return [env_obj] + self._list_files()
+        return objs + self._list_files()
 
     def _list_files(self):
         prefix = self._s3_path_files('')
+        log.info('list files: s3://%s%s', self.bucket.name, prefix)
         results = list(self.bucket.objects.filter(Prefix=prefix))
         if not results:
             return []
