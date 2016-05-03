@@ -548,7 +548,8 @@ class Microsecrets(object):
         log.error('Somehow returned from exec?')
 
     def _download_s3_environment(self, checksum=None, env_whitelist=None,
-                                 env_whitelist_all=None, ignore_extra=False):
+                                 env_whitelist_all=None, ignore_extra=False,
+                                 include_metadata=True):
 
         result = self._download_s3_environment_raw()
 
@@ -568,7 +569,7 @@ class Microsecrets(object):
             env_whitelist_all=env_whitelist_all,
             ignore_extra=ignore_extra,
             s3_key=s3_key,
-            include_metadata=True)
+            include_metadata=include_metadata)
 
     def _download_s3_environment_raw(self):
         obj = self._s3_find_latest(prefix=self._s3_path_environment()+'/')
