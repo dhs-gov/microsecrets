@@ -343,7 +343,7 @@ class Microsecrets(object):
         if bucket is None:
             bucket = self.bucket
 
-        url = 's3://{}{}'.format(bucket.name, prefix)
+        url = 's3://{0}{1}'.format(bucket.name, prefix)
         log.info('_s3_find_latest: %r', url)
 
         try:
